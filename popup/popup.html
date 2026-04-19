@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="../styles/popup.css">
+    <script src="../lib/marked.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="toggle-ball">
+                <label class="switch">
+                    <input type="checkbox" id="toggleBall" checked>
+                    <span class="slider round"></span>
+                </label>
+                <span class="toggle-label">显示悬浮球</span>
+            </div>
+        </div>
+        <div id="chat-container" class="chat-container">
+            <div id="messages" class="messages"></div>
+        </div>
+        <div class="input-container">
+            <textarea id="userInput" placeholder="请输入您的问题..." rows="2"></textarea>
+            <button id="askButton" class="send-button">
+            </button>
+        </div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+
+</html>

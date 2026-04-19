@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>WebChat - 设置</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>设置</h1>
+
+        <div class="settings-section">
+            <h2>常规设置（立即生效）</h2>
+            <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" id="autoHideDialog" checked>
+                    点击对话框外部时自动隐藏对话框
+                </label>
+            </div>
+            <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" id="enableContext" checked>
+                    启用上下文聊天（包含历史对话记录）
+                </label>
+            </div>
+            <div id="contextSettings" class="sub-settings">
+                <div class="setting-item">
+                    <label for="maxContextRounds">保留最近对话轮数</label>
+                    <input type="number" id="maxContextRounds" min="1" max="10" value="3">
+                    <div class="help-text">设置保留最近几轮对话作为上下文（1-10轮），每轮包含一问一答</div>
+                </div>
+            </div>
+            <div class="setting-item">
+                <label for="systemPrompt">系统提示词</label>
+                <textarea id="systemPrompt" rows="3" placeholder="你是一个帮助理解网页内容的AI助手。请使用Markdown格式回复。"></textarea>
+                <div class="help-text">设置AI助手的角色和行为。留空则使用默认提示词。</div>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h2>API 配置</h2>
+            <div class="form-group">
+                <label for="apiType">API类型:</label>
+                <select id="apiType">
+                    <option value="custom">自定义API</option>
+                    <option value="ollama">本地模型(Ollama)</option>
+                </select>
+            </div>
+
+            <div id="apiSettings">
+                <div class="form-group api-key-group">
+                    <label for="apiKey">API密钥: <span class="required-mark">*</span></label>
+                    <div class="input-wrapper">
+                        <input type="password" id="apiKey" placeholder="请输入API密钥" class="secure-input"
+                            autocomplete="off" spellcheck="false">
+                        <button type="button" id="toggleApiKey" class="toggle-visibility" title="点击显示">
+                            <span class="eye-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z" />
+                                </svg>
+                            </span>
+                        </button>
+                    </div>
+                    <small class="help-text">使用自定义API时必填</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="apiBase">请求URL: <span class="required-mark">*</span></label>
+                    <input type="text" id="apiBase" placeholder="">
+                    <small class="help-text" id="apiBaseHelp">API接口地址</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="model">AI模型: <span class="required-mark">*</span></label>
+                    <input type="text" id="model" placeholder="">
+                    <small class="help-text" id="modelHelp">模型名称</small>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="maxTokens">最大回复长度:</label>
+                <div class="range-with-input">
+                    <input type="range" id="maxTokensRange" min="128" max="4096" value="2048" step="1">
+                    <input type="number" id="maxTokensInput" min="128" max="4096" value="2048">
+                </div>
+                <small class="help-text">调整范围：128 ~ 4096 tokens</small>
+            </div>
+
+            <div class="form-group">
+                <label for="temperature">温度 (创造性):</label>
+                <div class="range-with-input">
+                    <input type="range" id="temperatureRange" min="0" max="1" value="0.7" step="0.1">
+                    <input type="number" id="temperatureInput" min="0" max="1" value="0.7" step="0.1">
+                </div>
+                <small class="help-text">调整范围：0.0 ~ 1.0 (值越大，回答越具有创造性)</small>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h2>会话日志</h2>
+                <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" id="enableSessionLogging" checked>
+                    将每次会话保存到本地 Markdown 日志
+                </label>
+                <div class="help-text">日志会通过本地桥接服务写入你指定的目录，便于后续整理和导入。</div>
+            </div>
+            <div id="sessionLogSettings" class="sub-settings">
+                <div class="form-group">
+                    <label for="sessionLogEndpoint">日志服务地址</label>
+                    <input type="text" id="sessionLogEndpoint" placeholder="http://127.0.0.1:8765/log-session">
+                    <small class="help-text">扩展会把整场会话 POST 到这个本地服务。</small>
+                </div>
+                <div class="form-group">
+                    <label for="sessionLogOutputDir">日志输出目录</label>
+                    <input type="text" id="sessionLogOutputDir" placeholder="~/webchat-session-logs">
+                    <small class="help-text">默认写入 `~/webchat-session-logs`。</small>
+                </div>
+                <div class="form-group">
+                    <label for="sessionLogWorkspaceRoot">工作区根目录</label>
+                    <input type="text" id="sessionLogWorkspaceRoot" placeholder="~/webchat-workspace">
+                    <small class="help-text">用于在日志元数据中记录你的工作区来源。</small>
+                </div>
+                <div class="form-group">
+                    <label for="sessionIdleMinutes">空闲多久切分为新会话</label>
+                    <input type="number" id="sessionIdleMinutes" min="1" max="720" value="30">
+                    <small class="help-text">同一标签页超过这个分钟数没有新提问，再次提问时会新建一个日志文件。</small>
+                </div>
+                <div class="inline-button-row">
+                    <button id="testSessionLog" type="button" class="secondary-button">测试日志服务</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button id="reset" class="secondary-button">还原默认设置</button>
+            <button id="save">保存并测试</button>
+        </div>
+
+        <div id="status" class="status"></div>
+    </div>
+    <script src="options.js"></script>
+</body>
+
+</html>
