@@ -374,3 +374,99 @@ input[type="number"].invalid {
     outline: none;
     box-shadow: 0 0 5px rgba(74, 175, 80, 0.2);
 }
+
+/* ===== 学习带教模式提示词编辑器 ===== */
+.mentor-prompt-item {
+    margin-bottom: 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fafafa;
+    overflow: hidden;
+}
+
+.mentor-prompt-item > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    user-select: none;
+}
+
+.mentor-prompt-item > summary::-webkit-details-marker {
+    display: none;
+}
+
+.mentor-prompt-item > summary::before {
+    content: "▶";
+    font-size: 10px;
+    color: #9ca3af;
+    transition: transform 0.15s;
+}
+
+.mentor-prompt-item[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.mentor-prompt-item .mp-icon {
+    font-size: 16px;
+}
+
+.mentor-prompt-item .mp-label {
+    flex: 1;
+}
+
+.mentor-prompt-item .mp-state {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.mentor-prompt-ite
+/* ===== 学习带教模式提示词编辑器 ===== */
+.mentor-promor:.mentor-prompt-item {
+    margin-bottom: 10px;
+    te="    margin-bottom: 1ro    border: 1px solid #:     border-radius: 8px;
+    bem    background: #fafafg:    overflow: hidden;
+}rd}
+
+.mentor-prompt-it5e7eb    list-style: none;
+    cursnt    cursor: pointer;od    padding: 10px 1dt    display: flex;
+   g:    align-items: fo    gap: 10px;
+    fonten    font-weig m    user-select: nosiz}
+
+.mentor-prompt-iteeight    display: none;
+}
+
+.mentor-prompt-item > summaryd #d1}
+
+.me    border-radiu    content: "▶";
+    font-size: 10pin    font-;
+    white    color: #9ca3af;
+
+    transitmpt-item }
+
+.mentor-prompt-item[open] > {
+       transform: rotate(90deg);
+}
+
+.mentor-p;
+}
+}
+
+.mentor-prompt-item .mp-iions     font-size: 16px;
+}
+
+.mentis}
+
+.mentor-prompt-i: 8px    flex: 1;
+}
+
+.mentor-promptto}
+
+.mentor-em .m    font-size: 11px;
+    font-ze    font-weight: 50:     padx;
+}

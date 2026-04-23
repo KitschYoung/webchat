@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <title>WebChat - 设置</title>
     <link rel="stylesheet" href="options.css">
+    <script src="../shared/mentorModes.js"></script>
 </head>
 
 <body>
@@ -28,8 +29,11 @@
             <div id="contextSettings" class="sub-settings">
                 <div class="setting-item">
                     <label for="maxContextRounds">保留最近对话轮数</label>
-                    <input type="number" id="maxContextRounds" min="1" max="10" value="3">
-                    <div class="help-text">设置保留最近几轮对话作为上下文（1-10轮），每轮包含一问一答</div>
+                    <input type="number" id="maxContextRounds" min="1" max="20" value="5">
+                    <div class="help-text">
+                        保留最近 N 轮问答作为上下文（1-20）。注意：在"网页+X"模式下，每轮都会重新注入完整页面正文——轮数越多、token 消耗和延迟都会成倍上升。
+                        一般讨论建议 3-5 轮；需要长篇追问时再加大。
+                    </div>
                 </div>
             </div>
             <div class="setting-item">
@@ -40,11 +44,20 @@
         </div>
 
         <div class="settings-section">
+            <h2>🎓 学习带教模式提示词</h2>
+            <p class="help-text" style="margin: 0 0 12px 0;">
+                这些是"带教"模式背后的系统提示词。**留空**使用内置默认；想自定义就直接在框里改。修改立即生效（下一轮对话开始使用新提示词）。
+            </p>
+            <div id="mentorPromptsContainer"></div>
+        </div>
+
+        <div class="settings-section">
             <h2>API 配置</h2>
             <div class="form-group">
                 <label for="apiType">API类型:</label>
                 <select id="apiType">
-                    <option value="custom">自定义API</option>
+                    <option value="custom">自定义API (OpenAI 兼容)</option>
+                    <option value="anthropic">Anthropic Claude (v1/messages + prompt caching)</option>
                     <option value="ollama">本地模型(Ollama)</option>
                 </select>
             </div>
@@ -136,6 +149,7 @@
 
         <div class="button-group">
             <button id="reset" class="secondary-button">还原默认设置</button>
+            <button id="saveNoTest" class="secondary-button">仅保存（跳过测试）</button>
             <button id="save">保存并测试</button>
         </div>
 

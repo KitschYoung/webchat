@@ -15,59 +15,86 @@ const API_CONFIGS = {
         apiBasePlaceholder: 'http://127.0.0.1:11434/api/chat',
         apiKeyPlaceholder: '本地模型无需API密钥',
         modelHelp: '常用模型：qwen2.5, llama2, mistral, gemma, codellama等。使用前请确保已安装模型：ollama pull qwen2.5'
+    },
+    anthropic: {
+        apiBase: 'https://api.anthropic.com/v1/messages',
+        modelPlaceholder: 'claude-sonnet-4-5',
+        requiresKey: true,
+        apiBasePlaceholder: 'https://api.anthropic.com/v1/messages',
+        apiKeyPlaceholder: '请输入 Anthropic API Key (sk-ant-...)',
+        modelHelp: '示例：claude-sonnet-4-5 / claude-opus-4-1 / claude-haiku-4-5。会自动在 page 内容上打 cache_control 命中 Anthropic prompt caching（90% off）。'
     }
 };
+
+// 校验字符串是否全为可用作 HTTP header 的 ASCII（排除控制字符）
+function assertHeaderSafe(value, fieldName) {
+    if (!value) return;
+    // 允许空格到 ~ (0x20..0x7E)
+    if (!/^[\x20-\x7E]+$/.test(value)) {
+        const bad = [...value].find((ch) => ch.charCodeAt(0) > 0x7E || ch.charCodeAt(0) < 0x20);
+        throw new Error(
+            `${fieldName} 里包含非 ASCII 字符（"${bad}"，码点 U+${bad.charCodeAt(0).toString(16).toUpperCase()}）。` +
+            `常见原因：从微信/聊天工具复制时带入了"智能引号"或不可见字符。请清空重新粘贴。`
+        );
+    }
+}
 
 // 测试API配置
 async function testApiConfig(settings) {
     try {
+        // 预检：apiKey / apiBase / model 不能有非 ASCII 字符（HTTP header/URL 要求）
+        assertHeaderSafe(settings.apiKey, 'API 密钥');
+        assertHeaderSafe(settings.apiBase, '请求 URL');
+        assertHeaderSafe(settings.model, '模型名');
+
         // 设置基础headers
         let headers = {
             'Content-Type': 'application/json'
         };
 
-        // 如果是自定义API，添加Authorization头
+        // 按 API 类型配置认证头
         if (settings.apiType === 'custom') {
             if (!settings.apiKey) {
                 throw new Error('API密钥是必填项');
             }
             headers['Authorization'] = `Bearer ${settings.apiKey}`;
+        } else if (settings.apiType === 'anthropic') {
+            if (!settings.apiKey) {
+                throw new Error('Anthropic API Key 是必填项');
+            }
+            headers['x-api-key'] = settings.apiKey;
+            headers['anthropic-version'] = '2023-06-01';
+            headers['anthropic-dangerous-direct-browser-access'] = 'true';
         }
 
         let requestBody;
         if (settings.apiType === 'ollama') {
-            // Ollama API 格式
             requestBody = {
                 model: settings.model,
                 messages: [
-                    {
-                        role: "system",
-                        content: "你是一个帮助理解网页内容的AI助手。"
-                    },
-                    {
-                        role: "user",
-                        content: "这是一条测试消息，请回复：API配置测试成功"
-                    }
+                    { role: "system", content: "你是一个帮助理解网页内容的AI助手。" },
+                    { role: "user", content: "这是一条测试消息，请回复：API配置测试成功" }
                 ],
                 stream: false,
-                options: {
-                    temperature: settings.temperature || 0.7,
-                    num_predict: 50
-                }
+                options: { temperature: settings.temperature || 0.7, num_predict: 50 }
+            };
+        } else if (settings.apiType === 'anthropic') {
+            requestBody = {
+                model: settings.model,
+                max_tokens: 50,
+                temperature: 0.7,
+                stream: false,
+                system: '你是一个帮助理解网页内容的AI助手。',
+                messages: [
+                    { role: 'user', content: '这是一条测试消息，请回复：API配置测试成功' }
+                ]
             };
         } else {
-            // OpenAI API 格式
             requestBody = {
                 model: settings.model,
                 messages: [
-                    {
-                        role: "system",
-                        content: "你是一个帮助理解网页内容的AI助手。"
-                    },
-                    {
-                        role: "user",
-                        content: "这是一条测试消息，请回复：API配置测试成功"
-                    }
+                    { role: "system", content: "你是一个帮助理解网页内容的AI助手。" },
+                    { role: "user", content: "这是一条测试消息，请回复：API配置测试成功" }
                 ],
                 max_tokens: 50,
                 temperature: 0.7,
@@ -107,15 +134,15 @@ async function testApiConfig(settings) {
 
         // 根据不同的API类型验证响应
         if (settings.apiType === 'ollama') {
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            // Ollama API 响应验证
+            if (data.error) throw new Error(data.error);
             if (!data.message || !data.message.content) {
                 throw new Error('无效的API响应格式');
             }
+        } else if (settings.apiType === 'anthropic') {
+            if (!data.content || !Array.isArray(data.content) || data.content.length === 0) {
+                throw new Error('无效的 Anthropic 响应格式');
+            }
         } else {
-            // OpenAI API 响应验证
             if (!data.choices || !data.choices[0].message) {
                 throw new Error('无效的API响应格式');
             }
@@ -203,7 +230,12 @@ function updateApiTypeUI(apiType) {
         // 更新API请求URL输入框
         apiBaseInput.value = items[`${apiType}_apiBase`];
         apiBaseInput.placeholder = config.apiBasePlaceholder;
-        document.getElementById('apiBaseHelp').textContent = `${apiType === 'ollama' ? '本地' : ''} API接口地址`;
+        const baseHelp = apiType === 'ollama'
+            ? '本地 API 接口地址'
+            : apiType === 'anthropic'
+                ? 'Anthropic v1/messages 端点（官方：https://api.anthropic.com/v1/messages）；浏览器直连会带 anthropic-dangerous-direct-browser-access 头'
+                : 'API 接口地址';
+        document.getElementById('apiBaseHelp').textContent = baseHelp;
 
         // 更新模型输入框
         modelInput.value = items[`${apiType}_model`];
@@ -294,6 +326,49 @@ function updateMaxTokensDisplay(value) {
     document.getElementById('maxTokensInput').value = value;
 }
 
+// 保存而不测试：验证必填项后直接写入存储
+async function saveOptionsWithoutTest() {
+    const apiType = document.getElementById('apiType').value;
+    const settings = buildSettingsFromForm(apiType);
+    try {
+        validateSettings({
+            apiType,
+            apiKey: settings[`${apiType}_apiKey`],
+            apiBase: settings[`${apiType}_apiBase`],
+            model: settings[`${apiType}_model`]
+        });
+        await chrome.storage.sync.set(settings);
+        showStatus('✅ 已保存（未测试）。若后续对话报错再回来排查');
+    } catch (error) {
+        showStatus(error.message, 'error');
+    }
+}
+
+// 把表单字段打包成 settings 对象（saveOptions 与 saveOptionsWithoutTest 共用）
+function buildSettingsFromForm(apiType) {
+    const settings = {
+        apiType,
+        maxTokens: parseInt(document.getElementById('maxTokensInput').value),
+        temperature: parseFloat(document.getElementById('temperatureInput').value),
+        enableSessionLogging: document.getElementById('enableSessionLogging').checked,
+        sessionLogEndpoint: document.getElementById('sessionLogEndpoint').value.trim() || DEFAULT_SETTINGS.sessionLogEndpoint,
+        sessionLogOutputDir: document.getElementById('sessionLogOutputDir').value.trim() || DEFAULT_SETTINGS.sessionLogOutputDir,
+        sessionLogWorkspaceRoot: document.getElementById('sessionLogWorkspaceRoot').value.trim() || DEFAULT_SETTINGS.sessionLogWorkspaceRoot,
+        sessionIdleMinutes: parseInt(document.getElementById('sessionIdleMinutes').value, 10) || DEFAULT_SETTINGS.sessionIdleMinutes,
+        [`${apiType}_apiKey`]: document.getElementById('apiKey').value.trim(),
+        [`${apiType}_apiBase`]: apiType === 'custom'
+            ? document.getElementById('apiBase').value.trim()
+            : (document.getElementById('apiBase').value.trim() || API_CONFIGS[apiType].apiBase),
+        [`${apiType}_model`]: document.getElementById('model').value.trim()
+    };
+    settings.activeConfig = {
+        apiKey: settings[`${apiType}_apiKey`],
+        apiBase: settings[`${apiType}_apiBase`],
+        model: settings[`${apiType}_model`]
+    };
+    return settings;
+}
+
 // 保存设置到Chrome存储
 async function saveOptions() {
     const apiType = document.getElementById('apiType').value;
@@ -330,26 +405,42 @@ async function saveOptions() {
             model: settings[`${apiType}_model`]
         });
 
-        // 显示测试中状态
-        showStatus('正在测试API配置...');
-
-        // 测试API配置
-        await testApiConfig({
-            apiType,
-            apiKey: settings[`${apiType}_apiKey`],
-            apiBase: settings[`${apiType}_apiBase`],
-            model: settings[`${apiType}_model`]
-        });
-
-        await testSessionLogConfig(settings);
-
-        // 保存设置
+        // 先保存（保证即使测试失败也有持久化，避免白填）
         await chrome.storage.sync.set(settings);
+        showStatus('设置已保存，正在测试...');
 
-        // 显示成功消息（不会自动消失）
-        showStatus('✅ API配置和日志配置测试成功，设置已保存');
+        // 测试 API（options 页的 fetch 受 CORS 约束，而实际对话走 service worker；
+        // 所以 options 页测试失败不代表扩展不能用）
+        const testResults = [];
+        try {
+            await testApiConfig({
+                apiType,
+                apiKey: settings[`${apiType}_apiKey`],
+                apiBase: settings[`${apiType}_apiBase`],
+                model: settings[`${apiType}_model`]
+            });
+            testResults.push('✅ API 配置测试通过');
+        } catch (e) {
+            testResults.push(
+                `⚠️ API 测试未通过（${e.message}）\n` +
+                `注意：设置页的测试受浏览器 CORS 限制，实际对话走扩展后台（不受限），` +
+                `所以这里失败不代表真的用不了。回到网页直接试一下对话即可。`
+            );
+        }
+
+        try {
+            await testSessionLogConfig(settings);
+            testResults.push('✅ 日志服务测试通过');
+        } catch (e) {
+            if (settings.enableSessionLogging) {
+                testResults.push(`⚠️ 日志服务不可用（${e.message}），会先进队列待补写`);
+            }
+        }
+
+        const allOk = testResults.every((r) => r.startsWith('✅'));
+        showStatus(testResults.join('\n\n'), allOk ? 'success' : 'warning');
     } catch (error) {
-        // 显示错误消息（不会自动消失）
+        // 验证失败（必填项缺失）不保存
         showStatus(error.message, 'error');
     }
 }
@@ -400,17 +491,22 @@ const DEFAULT_SETTINGS = {
     apiType: 'custom',
     maxTokens: 2048,
     temperature: 0.7,
+    // 请在扩展设置页填写密钥与端点；此处默认值保持为空，避免泄露。
     custom_apiKey: '',
     custom_apiBase: '',
     custom_model: '',
     ollama_apiKey: 'ollama',
     ollama_apiBase: 'http://127.0.0.1:11434/api/chat',
     ollama_model: 'llama2',
-    enableSessionLogging: true,
+    anthropic_apiKey: '',
+    anthropic_apiBase: 'https://api.anthropic.com/v1/messages',
+    anthropic_model: 'claude-sonnet-4-5',
+    enableSessionLogging: false,
     sessionLogEndpoint: 'http://127.0.0.1:8765/log-session',
-    sessionLogOutputDir: '~/webchat-session-logs',
-    sessionLogWorkspaceRoot: '~/webchat-workspace',
-    sessionIdleMinutes: 30
+    sessionLogOutputDir: '',
+    sessionLogWorkspaceRoot: '',
+    sessionIdleMinutes: 30,
+    mentorPrompts: {}
 };
 
 // 修改还原设置函数
@@ -462,6 +558,13 @@ async function resetOptions() {
 
         // 确保API密钥输入组可见（因为默认是custom类型）
         document.querySelector('.api-key-group').style.display = 'block';
+
+        // 清空带教提示词编辑器并重新渲染（所有覆盖已清）
+        const mpContainer = document.getElementById('mentorPromptsContainer');
+        if (mpContainer) {
+            mpContainer.innerHTML = '';
+            initMentorPromptsEditor();
+        }
 
         // 示成功提示
         showStatus('已还原并保存默认设置。注意：使用前请先配置必要的API信息并测试。', 'warning');
@@ -541,6 +644,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateTemperatureDisplay(Math.round(value * 10) / 10);
     });
 
+    const saveNoTestButton = document.getElementById('saveNoTest');
+    if (saveNoTestButton) {
+        saveNoTestButton.addEventListener('click', async () => {
+            if (!validateNumberInput(maxTokensInput, 128, 4096) ||
+                !validateNumberInput(temperatureInput, 0, 1, true)) {
+                return;
+            }
+            await saveOptionsWithoutTest();
+        });
+    }
+
     saveButton.addEventListener('click', async () => {
         if (!validateNumberInput(maxTokensInput, 128, 4096) ||
             !validateNumberInput(temperatureInput, 0, 1, true)) {
@@ -582,7 +696,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.storage.sync.get({
         autoHideDialog: true,
         enableContext: true,
-        maxContextRounds: 3,
+        maxContextRounds: 5,
         systemPrompt: '你是一个帮助理解网页内容的AI助手。请使用Markdown格式回复。'
     }, (items) => {
         autoHideDialog.checked = items.autoHideDialog;
@@ -600,7 +714,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     maxContextRounds.addEventListener('change', () => {
         let value = parseInt(maxContextRounds.value, 10);
-        value = Math.max(1, Math.min(10, value));
+        value = Math.max(1, Math.min(20, value));
         maxContextRounds.value = value;
         chrome.storage.sync.set({ maxContextRounds: value });
     });
@@ -660,4 +774,131 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoHideDialog.addEventListener('change', () => {
         debounceSave(autoHideDialog.checked);
     });
+
+    // ===== 学习带教模式提示词编辑器 =====
+    initMentorPromptsEditor();
 });
+
+function initMentorPromptsEditor() {
+    const container = document.getElementById('mentorPromptsContainer');
+    if (!container) return;
+    const MentorAPI = self.WebChatMentor;
+    if (!MentorAPI) {
+        container.textContent = '⚠️ 带教模块未加载';
+        return;
+    }
+
+    // 只展示非 OFF 的几种
+    const flavors = Object.values(MentorAPI.MENTOR_FLAVORS).filter(
+        (f) => f !== MentorAPI.MENTOR_FLAVORS.OFF
+    );
+
+    chrome.storage.sync.get({ mentorPrompts: {} }, ({ mentorPrompts }) => {
+        const overrides = mentorPrompts || {};
+        const saveTimers = {};
+
+        flavors.forEach((flavor) => {
+            const meta = MentorAPI.MENTOR_META[flavor];
+            const defaultPrompt = MentorAPI.getDefaultMentorPrompt(flavor);
+            const currentValue = typeof overrides[flavor] === 'string' ? overrides[flavor] : '';
+            const isOverridden = Boolean(currentValue && currentValue.trim());
+
+            const wrap = document.createElement('details');
+            wrap.className = 'mentor-prompt-item';
+            wrap.open = isOverridden; // 已自定义的默认展开
+
+            const summary = document.createElement('summary');
+            summary.innerHTML = `
+                <span class="mp-icon">${meta.icon}</span>
+                <span class="mp-label">${meta.label}</span>
+                <span class="mp-state" data-state="${isOverridden ? 'custom' : 'default'}">${
+                    isOverridden ? '已自定义' : '使用默认'
+                }</span>
+            `;
+            wrap.appendChild(summary);
+
+            const body = document.createElement('div');
+            body.className = 'mp-body';
+
+            const hint = document.createElement('div');
+            hint.className = 'help-text';
+            hint.textContent = meta.hint;
+            body.appendChild(hint);
+
+            const textarea = document.createElement('textarea');
+            textarea.rows = 12;
+            textarea.placeholder = defaultPrompt;
+            textarea.value = currentValue;
+            textarea.spellcheck = false;
+            body.appendChild(textarea);
+
+            const row = document.createElement('div');
+            row.className = 'mp-actions';
+
+            const loadDefaultBtn = document.createElement('button');
+            loadDefaultBtn.type = 'button';
+            loadDefaultBtn.className = 'secondary-button';
+            loadDefaultBtn.textContent = '填入默认（以便修改）';
+            loadDefaultBtn.addEventListener('click', () => {
+                textarea.value = defaultPrompt;
+                textarea.dispatchEvent(new Event('input'));
+                textarea.focus();
+            });
+            row.appendChild(loadDefaultBtn);
+
+            const resetBtn = document.createElement('button');
+            resetBtn.type = 'button';
+            resetBtn.className = 'secondary-button';
+            resetBtn.textContent = '恢复默认（清空覆盖）';
+            resetBtn.addEventListener('click', () => {
+                textarea.value = '';
+                textarea.dispatchEvent(new Event('input'));
+            });
+            row.appendChild(resetBtn);
+
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'secondary-button';
+            copyBtn.textContent = '复制默认到剪贴板';
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(defaultPrompt);
+                    copyBtn.textContent = '✓ 已复制';
+                    setTimeout(() => { copyBtn.textContent = '复制默认到剪贴板'; }, 1500);
+                } catch (e) {
+                    alert('复制失败：' + e.message);
+                }
+            });
+            row.appendChild(copyBtn);
+
+            body.appendChild(row);
+            wrap.appendChild(body);
+            container.appendChild(wrap);
+
+            const stateBadge = summary.querySelector('.mp-state');
+            function refreshState() {
+                const custom = Boolean(textarea.value && textarea.value.trim());
+                stateBadge.dataset.state = custom ? 'custom' : 'default';
+                stateBadge.textContent = custom ? '已自定义' : '使用默认';
+            }
+
+            // 1 秒防抖保存
+            textarea.addEventListener('input', () => {
+                refreshState();
+                if (saveTimers[flavor]) clearTimeout(saveTimers[flavor]);
+                saveTimers[flavor] = setTimeout(() => {
+                    chrome.storage.sync.get({ mentorPrompts: {} }, ({ mentorPrompts }) => {
+                        const next = { ...(mentorPrompts || {}) };
+                        const v = (textarea.value || '').trim();
+                        if (v) {
+                            next[flavor] = v;
+                        } else {
+                            delete next[flavor];
+                        }
+                        chrome.storage.sync.set({ mentorPrompts: next });
+                    });
+                }, 800);
+            });
+        });
+    });
+}

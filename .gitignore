@@ -166,3 +166,9 @@ cython_debug/
 # Local AI assistant metadata
 .claude/
 CLAUDE.md
+
+# Local scratch / experiments (contain personal keys or WIP code)
+temp.py
+main.py
+pyproject.toml
+.python-version

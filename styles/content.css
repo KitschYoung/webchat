@@ -840,6 +840,8 @@ html.ai-assistant-panel-open .ball-container {
 #ai-assistant-dialog .panel-side-switch,
 #ai-assistant-dialog .panel-close,
 #ai-assistant-dialog .panel-clear,
+#ai-assistant-dialog .panel-mentor,
+#ai-assistant-dialog .panel-annotate,
 #ai-assistant-dialog .panel-width-cycle {
     width: 26px !important;
     height: 26px !important;
@@ -860,6 +862,8 @@ html.ai-assistant-panel-open .ball-container {
 #ai-assistant-dialog .panel-side-switch:hover,
 #ai-assistant-dialog .panel-close:hover,
 #ai-assistant-dialog .panel-clear:hover,
+#ai-assistant-dialog .panel-mentor:hover,
+#ai-assistant-dialog .panel-annotate:hover,
 #ai-assistant-dialog .panel-width-cycle:hover {
     background: #eef2f7 !important;
     color: #111 !important;
@@ -867,6 +871,158 @@ html.ai-assistant-panel-open .ball-container {
 
 #ai-assistant-dialog .panel-close {
     font-size: 20px !important;
+}
+
+/* 追根究底：助手消息内划词浮动按钮 */
+#deepdive-floating-btn {
+    position: absolute !important;
+    z-index: 2147483000 !important;
+    padding: 4px 10px !important;
+    background: #1f2937 !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 14px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25) !important;
+    font-size: 12px !important;
+    line-height: 1.2 !important;
+    cursor: pointer !important;
+    user-select: none !important;
+}
+
+#deepdive-floating-btn:hover {
+    background: #111827 !important;
+}
+
+#deepdive-floating-btn[hidden] {
+    display: none !important;
+}
+
+/* 网页知识点自动标注 */
+#ai-assistant-dialog .panel-annotate.active {
+    background: linear-gradient(135deg, #fff4d6, #ffe7a3) !important;
+    color: #92400e !important;
+    box-shadow: 0 0 0 1px #f5d37e inset !important;
+}
+
+#ai-assistant-dialog .panel-annotate.loading {
+    opacity: 0.6 !important;
+    pointer-events: none !important;
+}
+
+webchat-hl {
+    display: inline !important;
+    background: linear-gradient(180deg, transparent 55%, #fff3b0 55%) !important;
+    padding: 0 1px !important;
+    border-radius: 2px !important;
+    cursor: help !important;
+    transition: background 0.15s !important;
+}
+
+webchat-hl:hover {
+    background: #ffe483 !important;
+}
+
+#webchat-annot-tooltip {
+    position: absolute !important;
+    z-index: 2147483000 !important;
+    max-width: 320px !important;
+    padding: 8px 12px !important;
+    background: #1f2937 !important;
+    color: #fff !important;
+    font-size: 12.5px !important;
+    line-height: 1.5 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25) !important;
+    pointer-events: none !important;
+    white-space: normal !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif !important;
+}
+
+#webchat-annot-tooltip[hidden] {
+    display: none !important;
+}
+
+/* 带教模式：按钮开启状态 + 悬浮菜单 */
+#ai-assistant-dialog .mentor-toggle-wrap {
+    position: relative !important;
+    display: inline-flex !important;
+}
+
+#ai-assistant-dialog .panel-mentor.active {
+    background: linear-gradient(135deg, #e8f0ff, #dfe9ff) !important;
+    color: #1d4ed8 !important;
+    box-shadow: 0 0 0 1px #c9d7ff inset !important;
+}
+
+#ai-assistant-dialog .mentor-popover {
+    position: absolute !important;
+    top: calc(100% + 6px) !important;
+    right: 0 !important;
+    z-index: 10 !important;
+    background: #fff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 10px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12) !important;
+    padding: 6px !important;
+    width: 260px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+}
+
+#ai-assistant-dialog .mentor-popover[hidden] {
+    display: none !important;
+}
+
+#ai-assistant-dialog .mentor-item {
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+    padding: 8px 10px !important;
+    border: none !important;
+    background: transparent !important;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    text-align: left !important;
+    width: 100% !important;
+    color: #374151 !important;
+    font: inherit !important;
+}
+
+#ai-assistant-dialog .mentor-item:hover {
+    background: #f3f4f6 !important;
+}
+
+#ai-assistant-dialog .mentor-item.active {
+    background: #eef2ff !important;
+    color: #1d4ed8 !important;
+}
+
+#ai-assistant-dialog .mentor-item-icon {
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+    flex-shrink: 0 !important;
+    width: 20px !important;
+    text-align: center !important;
+}
+
+#ai-assistant-dialog .mentor-item-main {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+    min-width: 0 !important;
+}
+
+#ai-assistant-dialog .mentor-item-label {
+    font-weight: 600 !important;
+    font-size: 13px !important;
+}
+
+#ai-assistant-dialog .mentor-item-hint {
+    font-size: 12px !important;
+    color: #6b7280 !important;
+    line-height: 1.35 !important;
+    white-space: normal !important;
 }
 
 /* /commands 提示词模板菜单 */

@@ -1,3 +1,22 @@
+// 扩展上下文可能在重新加载后失效，静默包一层防抛错
+function safeStorageSet(obj) {
+    try {
+        if (chrome?.runtime?.id && chrome.storage?.sync) {
+            chrome.storage.sync.set(obj);
+        }
+    } catch (e) { /* extension context invalidated */ }
+}
+function safeStorageGet(defaults, cb) {
+    try {
+        if (chrome?.runtime?.id && chrome.storage?.sync) {
+            chrome.storage.sync.get(defaults, cb);
+            return;
+        }
+    } catch (e) { /* extension context invalidated */ }
+    // 上下文已失效，回退到默认值
+    try { cb && cb(defaults); } catch (e) {}
+}
+
 function parseWebContent() {
     // 克隆当前文档以供解析，不影响原始页面
     const docClone = document.cloneNode(true);
@@ -7,9 +26,14 @@ function parseWebContent() {
     const styles = docClone.querySelectorAll('style, link[rel="stylesheet"]');
     const headers = docClone.querySelectorAll('header, nav');
     const footers = docClone.querySelectorAll('footer');
+    // ⚠️ 关键：排除 WebChat 自身注入到页面的 UI，否则聊天面板和历史消息会被当成"正文"
+    // 这会让 preamble 每轮都变化，直接毁掉 prompt caching。
+    const webchatUI = docClone.querySelectorAll(
+        '#ai-assistant-dialog, #ai-assistant-ball, #webchat-annot-tooltip, [id^="webchat-"], [id^="ai-assistant-"]'
+    );
 
     // 从克隆的文档中移除元素
-    [...scripts, ...styles, ...headers, ...footers].forEach(element => {
+    [...scripts, ...styles, ...headers, ...footers, ...webchatUI].forEach(element => {
         if (element.parentNode) {
             element.parentNode.removeChild(element);
         }
@@ -60,6 +84,11 @@ function createDialog() {
                         </div>
                     </div>
                     <div class="panel-actions">
+                        <div class="mentor-toggle-wrap">
+                            <button type="button" class="panel-mentor" id="mentorToggle" title="学习带教模式（苏格拉底式引导）" aria-pressed="false">🎓</button>
+                            <div class="mentor-popover" id="mentorPopover" hidden role="menu" aria-label="选择带教风格"></div>
+                        </div>
+                        <button type="button" class="panel-annotate" id="annotateToggle" title="识别并标注本页关键概念（点击开启/关闭）" aria-pressed="false">📍</button>
                         <button type="button" class="panel-clear" title="清空当前会话">🧹</button>
                         <button type="button" class="panel-width-cycle" title="切换预设宽度">⤢</button>
                         <button type="button" class="panel-side-switch" title="切换左右停靠">⇄</button>
@@ -165,7 +194,7 @@ function createDialog() {
             e.stopPropagation();
             const next = (dialog.dataset.panelSide || 'right') === 'right' ? 'left' : 'right';
             applyPanelSide(next);
-            chrome.storage.sync.set({ panelSide: next });
+            safeStorageSet({ panelSide: next });
         });
     }
     const closeBtn = dialog.querySelector('.panel-close');
@@ -210,7 +239,7 @@ function createDialog() {
             // 找下一个严格大于当前宽度的预设；循环
             const next = WIDTH_PRESETS.find((w) => w > current + 4) ?? WIDTH_PRESETS[0];
             const applied = applyPanelWidth(next);
-            chrome.storage.sync.set({ panelWidth: applied });
+            safeStorageSet({ panelWidth: applied });
         });
     }
 
@@ -247,7 +276,7 @@ function createDialog() {
                 ? resizeStart.width - delta
                 : resizeStart.width + delta;
             const applied = applyPanelWidth(raw);
-            chrome.storage.sync.set({ panelWidth: applied });
+            safeStorageSet({ panelWidth: applied });
         });
     }
 
@@ -263,7 +292,7 @@ function createDialog() {
     }
 
     // 初始化：从存储读取停靠方向和宽度
-    chrome.storage.sync.get({
+    safeStorageGet({
         panelWidth: DEFAULT_W,
         panelSide: 'right'
     }, (items) => {
@@ -284,8 +313,8 @@ function createDialog() {
         const contextMenu = document.querySelector('.context-menu');
 
         // 获取自动隐藏设置（侧边栏模式下默认关闭，避免误触关掉面板）
-        const settings = await chrome.storage.sync.get({
-            autoHideDialog: false
+        const settings = await new Promise((resolve) => {
+            safeStorageGet({ autoHideDialog: false }, resolve);
         });
 
         if (settings.autoHideDialog && // 检查设置
@@ -453,11 +482,11 @@ function createFloatingBall() {
         container.style.transition = 'left 0.2s ease, top 0.2s ease, right 0.2s ease, bottom 0.2s ease';
         Object.assign(container.style, position);
 
-        chrome.storage.sync.set({ ballPosition: position });
+        safeStorageSet({ ballPosition: position });
     });
 
     // 从存储中加载位置，并确保位置在可视区域内
-    chrome.storage.sync.get({
+    safeStorageGet({
         ballPosition: { right: '0px', bottom: '20px', left: 'auto', top: 'auto', edge: 'right' }
     }, (items) => {
         // 获取容器和窗口尺寸
@@ -522,7 +551,7 @@ function createFloatingBall() {
         }
 
         // 保存调整后的位置
-        chrome.storage.sync.set({ ballPosition: position });
+        safeStorageSet({ ballPosition: position });
     });
 
     // 添加窗口大小变化监听器
@@ -560,7 +589,7 @@ function createFloatingBall() {
         Object.assign(container.style, position);
 
         // 保存新位置
-        chrome.storage.sync.set({ ballPosition: position });
+        safeStorageSet({ ballPosition: position });
 
         // 检查是否需要添加边缘类
         const edgeThreshold = ball.offsetWidth / 2;
@@ -583,7 +612,7 @@ function createFloatingBall() {
         }
 
         // 保存更新后的位置和边缘状态
-        chrome.storage.sync.set({ ballPosition: position });
+        safeStorageSet({ ballPosition: position });
     });
 
     document.body.appendChild(container);
@@ -775,6 +804,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 void activeDialogSyncController.applyChatModeUpdate(request.chatMode, true);
             }
             sendResponse({ status: 'ok' });
+        } else if (request.action === 'mentorFlavorUpdated') {
+            if (activeDialogSyncController && activeDialogSyncController.tabId === request.tabId
+                && typeof activeDialogSyncController.applyMentorFlavorUpdate === 'function') {
+                void activeDialogSyncController.applyMentorFlavorUpdate(request.mentorFlavor, true);
+            }
+            sendResponse({ status: 'ok' });
         }
     } catch (error) {
         console.error('处理消息时出错:', error);
@@ -803,6 +838,8 @@ async function initializeDialog(dialog) {
         const clientId = `dialog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         let currentChatMode = 'web_persisted';
         let suppressModeSelect = false;
+        const MentorAPI = self.WebChatMentor || null;
+        let currentMentorFlavor = MentorAPI ? MentorAPI.DEFAULT_MENTOR_FLAVOR : 'off';
 
         // 创建并添加滚动按钮
         const scrollToBottomButton = createScrollToBottomButton(messagesContainer);
@@ -945,9 +982,105 @@ async function initializeDialog(dialog) {
             }
         }
 
+        // ----- 带教（mentor）模式 UI -----
+        const mentorToggle = dialog.querySelector('#mentorToggle');
+        const mentorPopover = dialog.querySelector('#mentorPopover');
+
+        function buildMentorPopover() {
+            if (!mentorPopover || !MentorAPI) return;
+            const flavors = [
+                MentorAPI.MENTOR_FLAVORS.OFF,
+                MentorAPI.MENTOR_FLAVORS.ALGORITHM,
+                MentorAPI.MENTOR_FLAVORS.PYTHON,
+                MentorAPI.MENTOR_FLAVORS.FEYNMAN,
+                MentorAPI.MENTOR_FLAVORS.GENERAL
+            ];
+            mentorPopover.innerHTML = flavors.map((f) => {
+                const meta = MentorAPI.MENTOR_META[f];
+                const active = f === currentMentorFlavor ? ' active' : '';
+                return `<button type="button" class="mentor-item${active}" data-flavor="${f}" role="menuitemradio" aria-checked="${f === currentMentorFlavor}">
+                    <span class="mentor-item-icon">${meta.icon}</span>
+                    <span class="mentor-item-main">
+                        <span class="mentor-item-label">${meta.label}</span>
+                        <span class="mentor-item-hint">${meta.hint}</span>
+                    </span>
+                </button>`;
+            }).join('');
+        }
+
+        function updateMentorUI(flavor) {
+            if (!MentorAPI || !mentorToggle) return;
+            currentMentorFlavor = MentorAPI.normalizeMentorFlavor(flavor);
+            const isOn = MentorAPI.isMentorActive(currentMentorFlavor);
+            mentorToggle.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+            mentorToggle.classList.toggle('active', isOn);
+            const meta = MentorAPI.getMentorMeta(currentMentorFlavor);
+            mentorToggle.title = isOn
+                ? `带教模式：${meta.label}（点击切换）`
+                : '学习带教模式（苏格拉底式引导）';
+            mentorToggle.textContent = isOn ? meta.icon : '🎓';
+            buildMentorPopover();
+        }
+
+        function hideMentorPopover() {
+            if (mentorPopover) mentorPopover.hidden = true;
+        }
+
+        async function applyMentorFlavorUpdate(flavor, silent) {
+            const prev = currentMentorFlavor;
+            updateMentorUI(flavor);
+            if (!silent && prev !== currentMentorFlavor) {
+                const meta = MentorAPI.getMentorMeta(currentMentorFlavor);
+                const tip = MentorAPI.isMentorActive(currentMentorFlavor)
+                    ? `已开启带教模式：${meta.label}。${meta.hint}`
+                    : '已关闭带教模式。';
+                addMessage(tip, false);
+            }
+        }
+
+        if (mentorToggle && mentorPopover && MentorAPI) {
+            buildMentorPopover();
+
+            mentorToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                mentorPopover.hidden = !mentorPopover.hidden;
+            });
+
+            mentorPopover.addEventListener('click', async (e) => {
+                const item = e.target.closest('.mentor-item');
+                if (!item) return;
+                const flavor = item.dataset.flavor;
+                hideMentorPopover();
+                if (flavor === currentMentorFlavor) return;
+                try {
+                    const response = await sendMessageWithRetry({
+                        action: 'setMentorFlavor',
+                        tabId,
+                        mentorFlavor: flavor
+                    });
+                    if (!response || response.status !== 'ok') {
+                        throw new Error(response?.error || '切换带教模式失败');
+                    }
+                    await applyMentorFlavorUpdate(response.mentorFlavor, false);
+                } catch (error) {
+                    console.error('切换带教模式失败:', error);
+                    addMessage('发生错误：' + error.message, false);
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!mentorPopover.hidden
+                    && !mentorPopover.contains(e.target)
+                    && e.target !== mentorToggle) {
+                    hideMentorPopover();
+                }
+            });
+        }
+
         activeDialogSyncController = {
             tabId,
             applyChatModeUpdate,
+            applyMentorFlavorUpdate,
             resetMessagesUI: () => resetMessagesUI()
         };
 
@@ -960,6 +1093,7 @@ async function initializeDialog(dialog) {
                 });
 
                 updateChatModeUI(response?.chatMode || 'web_persisted');
+                updateMentorUI(response?.mentorFlavor);
                 messagesContainer.innerHTML = '';
 
                 if (!response || !response.history || response.history.length === 0) {
@@ -1043,6 +1177,9 @@ async function initializeDialog(dialog) {
                                     updateChatModeUI(msg.chatMode || currentChatMode);
                                     resetMessagesUI();
                                     await loadHistory();
+                                    if (msg.reason === 'page-content-changed' || msg.reason === 'page-title-changed') {
+                                        showNotification('检测到页面内容变化，已开启新会话');
+                                    }
                                 } else if (msg.type === 'error') {
                                     messageDiv.remove();
                                     addMessage('发生错误：' + msg.error, false);
@@ -1350,7 +1487,7 @@ async function initializeDialog(dialog) {
                             autoScroll(true);
 
                             // 保存Tokens计数到存储
-                            chrome.storage.sync.set({ totalTokens });
+                            safeStorageSet({ totalTokens });
                         } else if (msg.type === 'session-reset') {
                             if (currentPort) {
                                 try {
@@ -1394,7 +1531,8 @@ async function initializeDialog(dialog) {
                         question: question,
                         requestId: prepare.requestId,
                         clientId: clientId,
-                        sessionReset: prepare.sessionReset
+                        sessionReset: prepare.sessionReset,
+                        sessionResetReason: prepare.sessionResetReason || ''
                     });
                 } catch (error) {
                     console.error('发送消息失败:', error);
@@ -1520,6 +1658,260 @@ async function initializeDialog(dialog) {
             userInput.setSelectionRange(userInput.value.length, userInput.value.length);
         }
 
+        // ===== 追根究底：在助手消息里划词 → 浮动"追问这句"按钮 =====
+        const deepdiveBtn = document.createElement('button');
+        deepdiveBtn.id = 'deepdive-floating-btn';
+        deepdiveBtn.type = 'button';
+        deepdiveBtn.hidden = true;
+        deepdiveBtn.textContent = '🔍 追问这句';
+        document.body.appendChild(deepdiveBtn);
+
+        function getAssistantMsgFromSelection(sel) {
+            if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+            const range = sel.getRangeAt(0);
+            let node = range.commonAncestorContainer;
+            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+            if (!node || !node.closest) return null;
+            // 仅当选区在本对话框的 assistant 消息内
+            if (!dialog.contains(node)) return null;
+            return node.closest('.assistant-message');
+        }
+
+        function updateDeepdiveBtn() {
+            const sel = window.getSelection ? window.getSelection() : null;
+            const msgEl = getAssistantMsgFromSelection(sel);
+            if (!msgEl) {
+                deepdiveBtn.hidden = true;
+                return;
+            }
+            const text = sel.toString().trim();
+            if (text.length < 2) {
+                deepdiveBtn.hidden = true;
+                return;
+            }
+            const rect = sel.getRangeAt(0).getBoundingClientRect();
+            if (!rect || (rect.width === 0 && rect.height === 0)) {
+                deepdiveBtn.hidden = true;
+                return;
+            }
+            deepdiveBtn.dataset.selected = text;
+            const top = rect.top + window.scrollY - 34;
+            const left = Math.min(
+                window.innerWidth - 120 + window.scrollX,
+                rect.right + window.scrollX + 6
+            );
+            deepdiveBtn.style.top = `${Math.max(4 + window.scrollY, top)}px`;
+            deepdiveBtn.style.left = `${Math.max(4, left)}px`;
+            deepdiveBtn.hidden = false;
+        }
+
+        // 鼠标弹起时再判断（避免选择过程中频闪）
+        document.addEventListener('mouseup', () => setTimeout(updateDeepdiveBtn, 0));
+        document.addEventListener('keyup', (e) => {
+            if (e.shiftKey || ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+                setTimeout(updateDeepdiveBtn, 0);
+            }
+        });
+        document.addEventListener('selectionchange', () => {
+            // 选区被清空时隐藏
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) deepdiveBtn.hidden = true;
+        });
+
+        // mousedown 而非 click，避免 textarea 聚焦前选区已丢
+        deepdiveBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const quote = deepdiveBtn.dataset.selected || '';
+            if (!quote) return;
+            const quoted = quote.split(/\r?\n/).map((l) => `> ${l}`).join('\n');
+            const ask = '请针对这句具体讲透：(1) 精确含义；(2) 为什么这么说；(3) 一个最小的具体例子；(4) 常见误解。';
+            const existing = userInput.value;
+            const prefix = existing.trim() ? `${existing.replace(/\s+$/, '')}\n\n` : '';
+            userInput.value = `${prefix}${quoted}\n\n${ask}`;
+            userInput.dispatchEvent(new Event('input'));
+            userInput.focus();
+            userInput.setSelectionRange(userInput.value.length, userInput.value.length);
+            deepdiveBtn.hidden = true;
+        });
+
+        // ===== 网页知识点自动标注 =====
+        const annotateToggle = dialog.querySelector('#annotateToggle');
+        let annotateActive = false;
+        let annotateLoading = false;
+        let annotateTooltip = null;
+
+        function ensureAnnotateTooltip() {
+            if (annotateTooltip) return annotateTooltip;
+            annotateTooltip = document.createElement('div');
+            annotateTooltip.id = 'webchat-annot-tooltip';
+            annotateTooltip.hidden = true;
+            document.body.appendChild(annotateTooltip);
+            return annotateTooltip;
+        }
+
+        function clearAnnotations() {
+            document.querySelectorAll('webchat-hl').forEach((el) => {
+                const parent = el.parentNode;
+                if (!parent) return;
+                while (el.firstChild) parent.insertBefore(el.firstChild, el);
+                parent.removeChild(el);
+                parent.normalize && parent.normalize();
+            });
+            if (annotateTooltip) annotateTooltip.hidden = true;
+        }
+
+        const ANNOTATE_SKIP_TAGS = new Set([
+            'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT',
+            'BUTTON', 'CODE', 'PRE', 'KBD', 'SAMP', 'SVG', 'CANVAS',
+            'AUDIO', 'VIDEO', 'IFRAME', 'WEBCHAT-HL'
+        ]);
+
+        function isInSkippedAncestor(node) {
+            let p = node.parentElement;
+            while (p) {
+                if (ANNOTATE_SKIP_TAGS.has(p.tagName)) return true;
+                if (p.id === 'ai-assistant-dialog' || p.id === 'ai-assistant-ball') return true;
+                if (p.contentEditable === 'true' || p.isContentEditable) return true;
+                p = p.parentElement;
+            }
+            return false;
+        }
+
+        function applyHighlights(concepts) {
+            if (!Array.isArray(concepts) || !concepts.length) return 0;
+            // 按长度降序优先长术语（避免短的吃掉长的一部分）
+            const sorted = concepts.slice().sort((a, b) => b.term.length - a.term.length);
+            const explMap = Object.create(null);
+            sorted.forEach((c) => { explMap[c.term] = c.explanation || ''; });
+
+            // 每个 term 最多标注 2 次，避免页面被淹没
+            const remaining = Object.create(null);
+            sorted.forEach((c) => { remaining[c.term] = 2; });
+
+            const terms = sorted.map((c) => c.term);
+            if (!terms.length) return 0;
+            // 构造一次性的正则；对特殊字符转义
+            const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+            const pattern = new RegExp(`(${escaped.join('|')})`, 'g');
+
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                    if (isInSkippedAncestor(node)) return NodeFilter.FILTER_REJECT;
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            });
+
+            let hits = 0;
+            const textNodes = [];
+            let n;
+            while ((n = walker.nextNode())) textNodes.push(n);
+
+            for (const textNode of textNodes) {
+                const text = textNode.nodeValue;
+                pattern.lastIndex = 0;
+                if (!pattern.test(text)) continue;
+                pattern.lastIndex = 0;
+
+                const frag = document.createDocumentFragment();
+                let lastIdx = 0;
+                let m;
+                let changed = false;
+                while ((m = pattern.exec(text)) !== null) {
+                    const term = m[1];
+                    if (remaining[term] <= 0) continue;
+                    if (m.index > lastIdx) {
+                        frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+                    }
+                    const hl = document.createElement('webchat-hl');
+                    hl.textContent = term;
+                    hl.setAttribute('data-explain', explMap[term] || '');
+                    frag.appendChild(hl);
+                    remaining[term]--;
+                    hits++;
+                    lastIdx = m.index + term.length;
+                    changed = true;
+                }
+                if (!changed) continue;
+                if (lastIdx < text.length) {
+                    frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+                }
+                textNode.parentNode.replaceChild(frag, textNode);
+            }
+            return hits;
+        }
+
+        function updateAnnotateBtn() {
+            if (!annotateToggle) return;
+            annotateToggle.classList.toggle('active', annotateActive);
+            annotateToggle.classList.toggle('loading', annotateLoading);
+            annotateToggle.setAttribute('aria-pressed', annotateActive ? 'true' : 'false');
+            annotateToggle.textContent = annotateLoading ? '⏳' : '📍';
+        }
+
+        async function toggleAnnotate() {
+            if (annotateLoading) return;
+            if (annotateActive) {
+                clearAnnotations();
+                annotateActive = false;
+                updateAnnotateBtn();
+                addMessage('已清除页面标注。', false);
+                return;
+            }
+            annotateLoading = true;
+            updateAnnotateBtn();
+            try {
+                const content = parseWebContent();
+                if (!content || content.trim().length < 50) {
+                    throw new Error('当前页面正文太短，无法有效分析');
+                }
+                const response = await sendMessageWithRetry({
+                    action: 'annotateConcepts',
+                    pageContent: content,
+                    pageTitle: document.title || ''
+                });
+                if (!response || response.status !== 'ok') {
+                    throw new Error(response?.error || '识别失败');
+                }
+                const hits = applyHighlights(response.concepts);
+                annotateActive = hits > 0;
+                if (annotateActive) {
+                    addMessage(`已标注 ${response.concepts.length} 个概念，命中 ${hits} 处。鼠标悬停查看释义；再次点击 📍 清除。`, false);
+                } else {
+                    addMessage('LLM 返回了概念，但没有在页面中匹配到（术语可能被改写过）。', false);
+                }
+            } catch (error) {
+                console.error('识别页面概念失败:', error);
+                addMessage('标注失败：' + error.message, false);
+            } finally {
+                annotateLoading = false;
+                updateAnnotateBtn();
+            }
+        }
+
+        if (annotateToggle) {
+            annotateToggle.addEventListener('click', () => {
+                void toggleAnnotate();
+            });
+        }
+
+        // tooltip 全局委托（页面其它地方悬停 webchat-hl 也有效）
+        document.addEventListener('mouseover', (e) => {
+            const hl = e.target && e.target.closest && e.target.closest('webchat-hl');
+            if (!hl) return;
+            const tip = ensureAnnotateTooltip();
+            tip.textContent = hl.getAttribute('data-explain') || hl.textContent;
+            const rect = hl.getBoundingClientRect();
+            tip.style.top = `${rect.bottom + window.scrollY + 4}px`;
+            tip.style.left = `${Math.max(4, rect.left + window.scrollX)}px`;
+            tip.hidden = false;
+        });
+        document.addEventListener('mouseout', (e) => {
+            const hl = e.target && e.target.closest && e.target.closest('webchat-hl');
+            if (!hl) return;
+            if (annotateTooltip) annotateTooltip.hidden = true;
+        });
+
         // ===== /commands 提示词模板菜单 =====
         const SLASH_TEMPLATES = [
             { name: 'summarize', title: '五条要点总结',   prompt: '请用 5 条要点总结这篇内容。' },
@@ -1530,6 +1922,9 @@ async function initializeDialog(dialog) {
             { name: 'outline',   title: '生成大纲',       prompt: '请为上述内容生成一个多层级的 Markdown 结构化大纲。' },
             { name: 'keypoints', title: '抽取核心要点',   prompt: '请列出上述内容中 5-8 个关键信息点，用项目符号呈现。' },
             { name: 'qa',        title: '出 5 道练习题', prompt: '基于上述内容出 5 道理解题，并在每题后给出参考答案。' },
+            { name: 'quiz',      title: '🎯 自测（本次会话）', prompt: '请基于我们这次会话已经讨论过的知识点，出 3 道自测题（由浅到深）。每题要求：(1) 只出题，先**不要**给答案；(2) 题型用"简答 / 判断 / 应用题"混合；(3) 题目要针对我表达中不够清晰的地方。最后一行加一句："请先尝试作答，回复后我再批改。"' },
+            { name: 'feynman',   title: '🧠 费曼：让我讲给你听', prompt: '从现在开始请扮演一个对这个话题**完全不懂**的学生，我来把刚才学到的内容讲给你听。请严格遵守：(1) 不要主动展示你知道；(2) 每次只追问 1-2 个我讲得最含糊的词或句子；(3) 用"我听不懂…能换个说法吗？"或"能再举个日常例子吗？"这种方式追问。我准备好了，先问我一句："你想给我讲清楚什么？"' },
+            { name: 'deepdive',  title: '🔍 针对上一句深挖',   prompt: '请针对你上一条回答中**最关键**或**最不容易理解**的那一句话，深入讲清楚：包括 (1) 它的精确含义；(2) 为什么这么说；(3) 一个最小的具体例子；(4) 常见的误解。' },
             { name: 'rewrite',   title: '改写更清晰',     prompt: '请改写上述内容，让表达更清晰凝练，保留原意。' },
             { name: 'counter',   title: '反驳/质疑角度', prompt: '请从另一个角度反驳/质疑上述内容，列出 3-5 条潜在问题或反例。' }
         ];
@@ -1640,7 +2035,7 @@ async function initializeDialog(dialog) {
         }
 
         // 从存储中加载Tokens计数
-        chrome.storage.sync.get({ totalTokens: 0 }, (items) => {
+        safeStorageGet({ totalTokens: 0 }, (items) => {
             totalTokens = items.totalTokens;
             tokensCounter.textContent = `Tokens: ${totalTokens}`;
         });

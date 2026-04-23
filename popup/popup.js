@@ -2,6 +2,7 @@ let markedInstance;
 
 // 从 shared/chatModes.js 读取统一定义
 const { CHAT_MODE_META, CHAT_MODES, DEFAULT_CHAT_MODE, normalizeChatMode } = self.WebChatModes;
+const MentorAPI = self.WebChatMentor || null;
 
 async function initMarked() {
     try {
@@ -46,6 +47,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentChatMode = 'web_persisted';
     let suppressModeSelect = false;
     let activePort = null;
+    let currentMentorFlavor = MentorAPI ? MentorAPI.DEFAULT_MENTOR_FLAVOR : 'off';
+    const mentorToggle = document.getElementById('mentorToggle');
+    const mentorPopover = document.getElementById('mentorPopover');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab.id;
@@ -65,9 +69,81 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (request.action === 'chatModeUpdated' && request.tabId === tabId) {
             updateChatModeUI(request.chatMode);
             sendResponse({ status: 'ok' });
+        } else if (request.action === 'mentorFlavorUpdated' && request.tabId === tabId) {
+            updateMentorUI(request.mentorFlavor);
+            sendResponse({ status: 'ok' });
         }
         return true;
     });
+
+    // ----- 带教（mentor）模式 -----
+    function buildMentorPopover() {
+        if (!mentorPopover || !MentorAPI) return;
+        const flavors = [
+            MentorAPI.MENTOR_FLAVORS.OFF,
+            MentorAPI.MENTOR_FLAVORS.ALGORITHM,
+            MentorAPI.MENTOR_FLAVORS.PYTHON,
+            MentorAPI.MENTOR_FLAVORS.FEYNMAN,
+            MentorAPI.MENTOR_FLAVORS.GENERAL
+        ];
+        mentorPopover.innerHTML = flavors.map((f) => {
+            const meta = MentorAPI.MENTOR_META[f];
+            const active = f === currentMentorFlavor ? ' active' : '';
+            return `<button type="button" class="mentor-item${active}" data-flavor="${f}" role="menuitemradio" aria-checked="${f === currentMentorFlavor}">
+                <span class="mentor-item-icon">${meta.icon}</span>
+                <span class="mentor-item-main">
+                    <span class="mentor-item-label">${meta.label}</span>
+                    <span class="mentor-item-hint">${meta.hint}</span>
+                </span>
+            </button>`;
+        }).join('');
+    }
+
+    function updateMentorUI(flavor) {
+        if (!MentorAPI || !mentorToggle) return;
+        currentMentorFlavor = MentorAPI.normalizeMentorFlavor(flavor);
+        const isOn = MentorAPI.isMentorActive(currentMentorFlavor);
+        mentorToggle.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+        mentorToggle.classList.toggle('active', isOn);
+        const meta = MentorAPI.getMentorMeta(currentMentorFlavor);
+        mentorToggle.title = isOn ? `带教模式：${meta.label}（点击切换）` : '学习带教模式（苏格拉底式引导）';
+        mentorToggle.textContent = isOn ? meta.icon : '🎓';
+        buildMentorPopover();
+    }
+
+    if (mentorToggle && mentorPopover && MentorAPI) {
+        buildMentorPopover();
+        mentorToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            mentorPopover.hidden = !mentorPopover.hidden;
+        });
+        mentorPopover.addEventListener('click', async (e) => {
+            const item = e.target.closest('.mentor-item');
+            if (!item) return;
+            const flavor = item.dataset.flavor;
+            mentorPopover.hidden = true;
+            if (flavor === currentMentorFlavor) return;
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    action: 'setMentorFlavor',
+                    tabId,
+                    mentorFlavor: flavor
+                });
+                if (!response || response.status !== 'ok') {
+                    throw new Error(response?.error || '切换带教模式失败');
+                }
+                updateMentorUI(response.mentorFlavor);
+            } catch (error) {
+                console.error('切换带教模式失败:', error);
+                addMessage('发生错误：' + error.message, false);
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (!mentorPopover.hidden && !mentorPopover.contains(e.target) && e.target !== mentorToggle) {
+                mentorPopover.hidden = true;
+            }
+        });
+    }
 
     chatModeButtons.forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -277,6 +353,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             updateChatModeUI(response?.chatMode || 'web_persisted');
+            updateMentorUI(response?.mentorFlavor);
             messagesContainer.innerHTML = '';
 
             if (!response || !response.history || response.history.length === 0) {

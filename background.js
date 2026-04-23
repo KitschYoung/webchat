@@ -3,19 +3,24 @@ const DEFAULT_SETTINGS = {
     maxTokens: 2048,
     temperature: 0.7,
     enableContext: true,
-    maxContextRounds: 3,
+    maxContextRounds: 5,
     systemPrompt: '你是一个帮助理解网页内容的AI助手。请使用Markdown格式回复。',
+    // 请在扩展设置页填写密钥与端点；此处默认值保持为空，避免泄露。
     custom_apiKey: '',
     custom_apiBase: '',
     custom_model: '',
     ollama_apiKey: '',
     ollama_apiBase: 'http://127.0.0.1:11434/api/chat',
     ollama_model: 'qwen2.5',
-    enableSessionLogging: true,
+    anthropic_apiKey: '',
+    anthropic_apiBase: 'https://api.anthropic.com/v1/messages',
+    anthropic_model: 'claude-sonnet-4-5',
+    enableSessionLogging: false,
     sessionLogEndpoint: 'http://127.0.0.1:8765/log-session',
-    sessionLogOutputDir: '~/webchat-session-logs',
-    sessionLogWorkspaceRoot: '~/webchat-workspace',
-    sessionIdleMinutes: 30
+    sessionLogOutputDir: '',
+    sessionLogWorkspaceRoot: '',
+    sessionIdleMinutes: 30,
+    mentorPrompts: {}
 };
 
 const STORAGE_KEYS = {
@@ -27,11 +32,11 @@ const STORAGE_KEYS = {
 // 按域名记忆的默认会话模式：{ [domain]: chatMode }
 let domainModePrefs = {};
 
-// 加载共享的会话模式定义（供 importScripts 引入）
+// 加载共享的会话模式与带教模式定义（供 importScripts 引入）
 try {
-    importScripts('shared/chatModes.js');
+    importScripts('shared/chatModes.js', 'shared/mentorModes.js');
 } catch (e) {
-    console.error('加载 shared/chatModes.js 失败:', e);
+    console.error('加载 shared/chatModes.js / shared/mentorModes.js 失败:', e);
 }
 
 const {
@@ -39,6 +44,14 @@ const {
     DEFAULT_CHAT_MODE,
     CHAT_MODE_META: SHARED_CHAT_MODE_META
 } = self.WebChatModes;
+
+const {
+    MENTOR_FLAVORS,
+    DEFAULT_MENTOR_FLAVOR,
+    normalizeMentorFlavor,
+    isMentorActive,
+    buildMentorSystemPrompt
+} = self.WebChatMentor;
 
 const runtimePorts = {};
 const runtimeControllers = {};
@@ -137,6 +150,14 @@ async function handleRuntimeMessage(request, sender) {
 
     if (action === 'setChatMode') {
         return await setChatMode(request.tabId, request.chatMode);
+    }
+
+    if (action === 'setMentorFlavor') {
+        return await setMentorFlavor(request.tabId, request.mentorFlavor);
+    }
+
+    if (action === 'annotateConcepts') {
+        return await annotateConcepts(request.pageContent || '', request.pageTitle || '');
     }
 
     if (action === 'clearHistory') {
@@ -271,10 +292,17 @@ function normalizeSession(session = {}) {
             pageDomain: session.sessionMeta?.pageDomain || 'unknown',
             pageContentExcerpt: session.sessionMeta?.pageContentExcerpt || '',
             pageContentLength: session.sessionMeta?.pageContentLength || 0,
+            // 同一会话内积累的多章正文前缀；每次检测到新章节就 push 一条
+            // { excerpt, content, anchor, createdAt }
+            // anchor 是"当时 history.length"，用于重放时把 preamble 插回那个位置
+            preambleChain: Array.isArray(session.sessionMeta?.preambleChain)
+                ? session.sessionMeta.preambleChain
+                : [],
             outputFilePath: session.sessionMeta?.outputFilePath || '',
             lastRotationReason: session.sessionMeta?.lastRotationReason || '',
             lastRecoveryReason: session.sessionMeta?.lastRecoveryReason || '',
             currentChatMode: normalizeChatMode(session.sessionMeta?.currentChatMode),
+            mentorFlavor: normalizeMentorFlavor(session.sessionMeta?.mentorFlavor),
             isFinalizing: Boolean(session.sessionMeta?.isFinalizing)
         },
         history: normalizeHistory(session.history || []),
@@ -433,6 +461,7 @@ async function prepareGeneration(tabId, pageContent, question) {
     await flushPendingLogs(settings);
 
     let sessionReset = false;
+    let sessionResetReason = '';
     let session = getSession(tabId);
     const tabInfo = await getTabSnapshot(tabId, pageContent);
 
@@ -443,6 +472,7 @@ async function prepareGeneration(tabId, pageContent, question) {
             await finalizeAndClearSession(tabId, rotationReason);
             session = createSession(tabInfo, nextChatMode);
             sessionReset = true;
+            sessionResetReason = rotationReason;
             await saveSession(tabId, session, true);
         }
     }
@@ -482,6 +512,7 @@ async function prepareGeneration(tabId, pageContent, question) {
         status: 'ok',
         requestId: session.reservation.requestId,
         sessionReset,
+        sessionResetReason,
         sessionId: session.sessionMeta.sessionId,
         question,
         chatMode: session.sessionMeta.currentChatMode,
@@ -511,6 +542,42 @@ async function setChatMode(tabId, chatMode) {
         status: 'ok',
         chatMode: normalizedMode
     };
+}
+
+async function setMentorFlavor(tabId, mentorFlavor) {
+    const normalizedFlavor = normalizeMentorFlavor(mentorFlavor);
+    const tabInfo = await getTabSnapshot(tabId);
+    let session = getSession(tabId);
+
+    if (!session) {
+        session = createSession(tabInfo);
+        session.sessionMeta.mentorFlavor = normalizedFlavor;
+    } else {
+        session.sessionMeta.mentorFlavor = normalizedFlavor;
+        updateSessionPageInfo(session, tabInfo);
+        touchSession(session);
+    }
+
+    await saveSession(tabId, session, true);
+    broadcastMentorFlavorUpdate(tabId, normalizedFlavor, 'mentor-flavor-changed');
+
+    return {
+        status: 'ok',
+        mentorFlavor: normalizedFlavor
+    };
+}
+
+function broadcastMentorFlavorUpdate(tabId, mentorFlavor, reason) {
+    const message = {
+        action: 'mentorFlavorUpdated',
+        tabId,
+        mentorFlavor,
+        reason
+    };
+    chrome.runtime.sendMessage(message).catch(() => { });
+    if (typeof tabId === 'number') {
+        chrome.tabs.sendMessage(tabId, message).catch(() => { });
+    }
 }
 
 async function startGenerationFromPort(port, request) {
@@ -581,6 +648,11 @@ async function startGenerationFromPort(port, request) {
     const turnId = createTurnId();
     const pageSnapshot = usesPageContext ? createPageSnapshot(tabInfo) : null;
 
+    // 同一会话内换章：若当前页面正文和上次使用的 preamble 不同，追加一段新 preamble。
+    // 这样做的好处：(1) 会话连贯——UI 里不打断、历史不清；(2) 每个 preamble 作为稳定前缀
+    // 都可以被 Anthropic prompt caching 命中；(3) 模型能同时看到多章上下文，方便回指。
+    maybeAppendPreamble(session, tabInfo, pageContent, usesPageContext);
+
     session.turns.push({
         turnId,
         requestId: request.requestId,
@@ -613,7 +685,7 @@ async function startGenerationFromPort(port, request) {
     if (request.sessionReset) {
         broadcastToTab(tabId, {
             type: 'session-reset',
-            reason: 'new-session',
+            reason: request.sessionResetReason || 'new-session',
             chatMode
         });
     }
@@ -683,18 +755,12 @@ async function handleAnswerGeneration(tabId, question, pageContent, settings) {
             throw new Error('请先在设置页填写AI模型');
         }
 
-        if (settings.apiType === 'custom' && !apiKey?.trim()) {
+        if ((settings.apiType === 'custom' || settings.apiType === 'anthropic') && !apiKey?.trim()) {
             throw new Error('请先在设置页填写API密钥');
         }
 
         const requestBody = buildRequestBody(settings, model, requestMessages);
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-
-        if (settings.apiType === 'custom' && apiKey) {
-            headers.Authorization = `Bearer ${apiKey}`;
-        }
+        const headers = buildRequestHeaders(settings, apiKey);
 
         const response = await fetch(apiBase, {
             method: 'POST',
@@ -708,7 +774,9 @@ async function handleAnswerGeneration(tabId, question, pageContent, settings) {
             throw new Error(errorText || 'API请求失败');
         }
 
-        const inputTokens = Math.ceil((settings.systemPrompt.length + promptContent.length) / 4);
+        // 粗略估算：对所有 messages 的 content 长度求和后 /4
+        const totalChars = requestMessages.reduce((sum, m) => sum + (m.content ? m.content.length : 0), 0);
+        const inputTokens = Math.ceil(totalChars / 4);
         broadcastToTab(tabId, {
             type: 'input-tokens',
             tokens: inputTokens
@@ -843,41 +911,121 @@ async function stopGeneration(tabId, reason) {
     return { status: 'idle' };
 }
 
-function buildMessagesForRequest(session, settings, question, pageContent, turn) {
-    const history = settings.enableContext
-        ? session.history.slice(-(Math.max(1, settings.maxContextRounds) * 2))
-        : [];
+// 判断当前页面是否是新章节；若是，则把正文作为新 preamble 追加到 session.preambleChain。
+// 锚点 anchor = 当时 session.history.length —— 表示这段 preamble 应该被"插入"到
+// history 里那个位置（即该章节的对话从此处开始）。
+function maybeAppendPreamble(session, tabInfo, pageContent, usesPageContext) {
+    if (!usesPageContext) return;
+    if (!pageContent || !pageContent.trim()) return;
 
-    const promptContent = turn.usesPageContext
-        ? (modeIsSelectionOnly(turn.chatMode)
-            ? `基于以下用户在网页上选中的内容回答问题：\n\n${pageContent}\n\n问题：${question}`
-            : `基于以下网页内容回答问题：\n\n${pageContent}\n\n问题：${question}`)
+    const excerpt = (tabInfo?.pageContentExcerpt || buildPageContentExcerpt(pageContent)).trim();
+    if (!excerpt) return;
+
+    const chain = session.sessionMeta.preambleChain || [];
+    const last = chain[chain.length - 1];
+
+    // 相同 excerpt → 还在同一章，复用现有 preamble。
+    if (last && last.excerpt === excerpt) return;
+
+    chain.push({
+        excerpt,
+        content: pageContent,
+        anchor: session.history.length,
+        pageTitle: tabInfo?.pageTitle || '',
+        pageUrl: tabInfo?.pageUrl || '',
+        createdAt: new Date().toISOString()
+    });
+    session.sessionMeta.preambleChain = chain;
+}
+
+function buildMessagesForRequest(session, settings, question, pageContent, turn) {
+    const isSelectionOnly = modeIsSelectionOnly(turn.chatMode);
+    const usesPageContext = Boolean(turn.usesPageContext) && !isSelectionOnly;
+
+    // 当前这轮的用户问题已在 startGeneration 时被 push 进 session.history，
+    // 下方又会显式 push 为最后一条 user，这里先去掉 history 末尾的 user 避免重复。
+    let history = [...session.history];
+    if (history.length && history[history.length - 1].isUser) {
+        history = history.slice(0, -1);
+    }
+
+    // 整页上下文模式下完整保留 history，以稳定 preamble 锚点与缓存前缀；
+    // 其它模式（纯聊 / 选中）仍按 maxContextRounds 截断节省 token。
+    if (!usesPageContext && settings.enableContext) {
+        const limit = Math.max(1, settings.maxContextRounds) * 2;
+        history = history.slice(-limit);
+        while (history.length && !history[0].isUser) history = history.slice(1);
+    }
+
+    // system prompt（如启用带教模式则叠加对应风格的提示词）
+    const mentorFlavor = session.sessionMeta?.mentorFlavor;
+    const systemContent = isMentorActive(mentorFlavor)
+        ? buildMentorSystemPrompt(mentorFlavor, settings.systemPrompt, settings.mentorPrompts)
+        : settings.systemPrompt;
+
+    const messages = [{ role: 'system', content: systemContent }];
+
+    const fullChain = usesPageContext ? (session.sessionMeta.preambleChain || []) : [];
+    // 学习多章时只保留最近 N 章的"正文"发给模型，避免请求体无限膨胀。
+    // 被淘汰那些章节的对话记录（history）仍完整保留，模型依然能看见"聊过什么"，
+    // 只是不再重新带上那些章节的完整网页正文。
+    const MAX_PREAMBLES_IN_REQUEST = 5;
+    const preambleChain = fullChain.slice(-MAX_PREAMBLES_IN_REQUEST);
+    // 为省 Anthropic cache_control 配额（总共 4 个），只给 system + 链上最后一段 preamble
+    // 打断点：这样缓存能覆盖"到最新 preamble 结束"的整段前缀，已是理论最大命中量。
+    const lastPreambleIdx = preambleChain.length - 1;
+
+    const pushPreamble = (pre, markCacheable) => {
+        messages.push({
+            role: 'user',
+            content: `以下是当前网页的正文内容，请作为后续所有问答的共同背景。读完回复"好的"。\n\n---\n\n${pre.content}`,
+            ...(markCacheable ? { _cacheable: true } : {})
+        });
+        messages.push({
+            role: 'assistant',
+            content: '好的，我已通读页面内容，随时可以提问。'
+        });
+    };
+
+    // 把 preambleChain 按 anchor 插入到 history 的相应位置，形成
+    // [sys, pre1_user, pre1_ack, history[0..a1], pre2_user, pre2_ack, history[a1..a2], ...]
+    let pi = 0;
+    for (let hi = 0; hi <= history.length; hi += 1) {
+        while (pi < preambleChain.length && preambleChain[pi].anchor <= hi) {
+            pushPreamble(preambleChain[pi], pi === lastPreambleIdx);
+            pi += 1;
+        }
+        if (hi < history.length) {
+            const m = history[hi];
+            messages.push({
+                role: m.isUser ? 'user' : 'assistant',
+                content: m.markdownContent || m.content
+            });
+        }
+    }
+
+    // 当前轮 user 消息：
+    // - 整页模式：pageContent 已在 preamble 里，这里只发原始问题
+    // - 选中模式：把选中片段拼进本轮问题
+    // - 纯聊模式：直接发问题
+    const promptContent = (turn.usesPageContext && isSelectionOnly)
+        ? `基于以下用户在网页上选中的内容回答问题：\n\n${pageContent}\n\n问题：${question}`
         : question;
+
+    messages.push({ role: 'user', content: promptContent });
 
     return {
         promptContent,
-        requestMessages: [
-            {
-                role: 'system',
-                content: settings.systemPrompt
-            },
-            ...history.map((message) => ({
-                role: message.isUser ? 'user' : 'assistant',
-                content: message.markdownContent || message.content
-            })),
-            {
-                role: 'user',
-                content: promptContent
-            }
-        ]
+        requestMessages: messages
     };
 }
 
 function buildRequestBody(settings, model, messages) {
     if (settings.apiType === 'ollama') {
+        // Ollama 格式：过滤内部字段 _cacheable
         return {
             model,
-            messages,
+            messages: messages.map(stripInternalFields),
             stream: true,
             options: {
                 temperature: settings.temperature,
@@ -886,13 +1034,174 @@ function buildRequestBody(settings, model, messages) {
         };
     }
 
+    if (settings.apiType === 'anthropic') {
+        return buildAnthropicBody(settings, model, messages, true);
+    }
+
+    // OpenAI 兼容格式
     return {
         model,
-        messages,
+        messages: messages.map(stripInternalFields),
         max_tokens: settings.maxTokens,
         temperature: settings.temperature,
         stream: true
     };
+}
+
+function stripInternalFields(m) {
+    const { _cacheable, ...rest } = m;
+    return rest;
+}
+
+// Anthropic v1/messages 格式：system 单独字段；大块内容附 cache_control 开启 prompt caching（90% off）
+function buildAnthropicBody(settings, model, messages, stream) {
+    const systemMsg = messages.find((m) => m.role === 'system');
+    const rest = messages.filter((m) => m.role !== 'system');
+
+    const anthMessages = rest.map((m) => {
+        const content = m._cacheable
+            ? [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }]
+            : m.content;
+        return { role: m.role, content };
+    });
+
+    const body = {
+        model,
+        max_tokens: settings.maxTokens,
+        temperature: settings.temperature,
+        stream: Boolean(stream),
+        messages: anthMessages
+    };
+
+    if (systemMsg && systemMsg.content) {
+        // 也把 system 打上 cache_control，让带教提示词也能缓存
+        body.system = [{ type: 'text', text: systemMsg.content, cache_control: { type: 'ephemeral' } }];
+    }
+
+    return body;
+}
+
+function buildRequestHeaders(settings, apiKey) {
+    const headers = { 'Content-Type': 'application/json' };
+
+    if (settings.apiType === 'anthropic') {
+        if (apiKey) headers['x-api-key'] = apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+        // 浏览器直连 Anthropic 需要此头开启 CORS 场景
+        headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    } else if (settings.apiType === 'custom' && apiKey) {
+        headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    return headers;
+}
+
+// 非流式一次性调用（用于 annotateConcepts 等需要完整 JSON 的场景）
+async function callLLMOnce(settings, messages, { temperature = 0.2, maxTokens = 1500 } = {}) {
+    const model = settings[`${settings.apiType}_model`];
+    const apiKey = settings[`${settings.apiType}_apiKey`];
+    const apiBase = settings[`${settings.apiType}_apiBase`];
+
+    if (!apiBase?.trim()) throw new Error('请先在设置页填写请求URL');
+    if (!model?.trim()) throw new Error('请先在设置页填写AI模型');
+    if ((settings.apiType === 'custom' || settings.apiType === 'anthropic') && !apiKey?.trim()) {
+        throw new Error('请先在设置页填写API密钥');
+    }
+
+    let body;
+    if (settings.apiType === 'ollama') {
+        body = { model, messages: messages.map(stripInternalFields), stream: false, options: { temperature, num_predict: maxTokens } };
+    } else if (settings.apiType === 'anthropic') {
+        body = buildAnthropicBody({ ...settings, maxTokens, temperature }, model, messages, false);
+    } else {
+        body = { model, messages: messages.map(stripInternalFields), max_tokens: maxTokens, temperature, stream: false };
+    }
+
+    const headers = buildRequestHeaders(settings, apiKey);
+
+    const response = await fetch(apiBase, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`LLM 请求失败: ${response.status} ${errText.slice(0, 200)}`);
+    }
+    const data = await response.json();
+    if (settings.apiType === 'ollama') {
+        return data.message?.content || '';
+    }
+    if (settings.apiType === 'anthropic') {
+        // Anthropic: content 是 content blocks 数组
+        return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('') || '';
+    }
+    return data.choices?.[0]?.message?.content || '';
+}
+
+async function annotateConcepts(pageContent, pageTitle) {
+    try {
+        const settings = await chrome.storage.sync.get(DEFAULT_SETTINGS);
+        const text = (pageContent || '').trim();
+        if (!text) {
+            return { status: 'error', error: '页面没有可分析的正文' };
+        }
+        // 截断过长内容，避免超 token
+        const truncated = text.slice(0, 8000);
+
+        const systemPrompt = [
+            '你是一个学习助手，专门从用户阅读的网页内容里找出"值得学习的关键概念/术语/要点"。',
+            '请根据给定的网页正文，识别 8-15 个最值得关注的概念或术语（初学者最应该记住或理解的）。',
+            '对每个概念，给出一条极简（<=45 字）的**中文**口语化解释，面向完全不了解此领域的人。',
+            '仅返回一个 JSON 数组，不要任何说明、前言或 Markdown 代码围栏。',
+            '每个元素形如：{"term": "原文中出现的准确术语", "explanation": "一句中文解释"}',
+            '要求：(1) term 必须是原文中**出现过的确切字符串**（原文是什么语言就保留什么语言，绝不翻译或改写，否则无法在网页上匹配）；(2) explanation **必须用中文**，即使页面本身是英文/日文等；(3) 优先选名词/专有名词/公式名/函数名等；(4) 避免过于泛化的词（如"内容""方法""问题"）；(5) 按原文出现顺序排列。'
+        ].join('\n');
+
+        const userPrompt = `网页标题：${pageTitle || '（未知）'}\n\n网页正文：\n${truncated}`;
+
+        const raw = await callLLMOnce(settings, [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+        ], { temperature: 0.1, maxTokens: 1500 });
+
+        // 容错解析：剥掉可能的 ```json``` 围栏
+        let jsonText = (raw || '').trim();
+        const fence = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (fence) jsonText = fence[1].trim();
+        const bracketStart = jsonText.indexOf('[');
+        const bracketEnd = jsonText.lastIndexOf(']');
+        if (bracketStart >= 0 && bracketEnd > bracketStart) {
+            jsonText = jsonText.slice(bracketStart, bracketEnd + 1);
+        }
+
+        let concepts;
+        try {
+            concepts = JSON.parse(jsonText);
+        } catch (e) {
+            return { status: 'error', error: `无法解析 LLM 返回的 JSON: ${e.message}`, raw: raw.slice(0, 500) };
+        }
+
+        if (!Array.isArray(concepts)) {
+            return { status: 'error', error: 'LLM 返回格式不对，应为数组' };
+        }
+        // 规范化并去重
+        const seen = new Set();
+        const cleaned = [];
+        for (const c of concepts) {
+            if (!c || typeof c.term !== 'string') continue;
+            const term = c.term.trim();
+            const explanation = typeof c.explanation === 'string' ? c.explanation.trim() : '';
+            if (!term || term.length > 60 || seen.has(term)) continue;
+            seen.add(term);
+            cleaned.push({ term, explanation });
+            if (cleaned.length >= 20) break;
+        }
+        return { status: 'ok', concepts: cleaned };
+    } catch (error) {
+        console.error('annotateConcepts 失败:', error);
+        return { status: 'error', error: error.message };
+    }
 }
 
 function buildHistoryResponse(session) {
@@ -902,7 +1211,8 @@ function buildHistoryResponse(session) {
             isGenerating: false,
             pendingQuestion: '',
             currentAnswer: '',
-            chatMode: DEFAULT_CHAT_MODE
+            chatMode: DEFAULT_CHAT_MODE,
+            mentorFlavor: DEFAULT_MENTOR_FLAVOR
         };
     }
 
@@ -912,7 +1222,8 @@ function buildHistoryResponse(session) {
         pendingQuestion: session.generatingState.pendingQuestion,
         currentAnswer: session.currentAnswer || '',
         sessionId: session.sessionMeta.sessionId,
-        chatMode: session.sessionMeta.currentChatMode
+        chatMode: session.sessionMeta.currentChatMode,
+        mentorFlavor: session.sessionMeta.mentorFlavor || DEFAULT_MENTOR_FLAVOR
     };
 }
 
@@ -1048,6 +1359,13 @@ function processStreamLine(apiType, rawLine) {
         return '';
     }
 
+    // SSE 的 event: 行、注释行 (: ...)、以及非 data: 开头的元信息：跳过
+    if (!line.startsWith('data:')) {
+        if (line.startsWith('event:') || line.startsWith(':')) return '';
+        // 对于 Ollama 这类直接发 JSON 而非标准 SSE 的路径，保持兼容
+        if (apiType !== 'ollama') return '';
+    }
+
     const payload = line.startsWith('data:') ? line.slice(5).trim() : line;
     if (!payload || payload === '[DONE]') {
         return '';
@@ -1064,6 +1382,13 @@ function processStreamLine(apiType, rawLine) {
 function extractContentFromChunk(apiType, parsed) {
     if (apiType === 'ollama') {
         return parsed.message?.content || '';
+    }
+    if (apiType === 'anthropic') {
+        // 只关心 content_block_delta 里的 text_delta
+        if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+            return parsed.delta.text || '';
+        }
+        return '';
     }
     return parsed.choices?.[0]?.delta?.content || '';
 }
@@ -1124,21 +1449,10 @@ function modeShouldPersist(chatMode) {
 }
 
 function getRotationReason(session, tabInfo, settings, forQuestion) {
-    if (session.sessionMeta.pageUrl && tabInfo.pageUrl && session.sessionMeta.pageUrl !== tabInfo.pageUrl) {
-        return 'page-changed';
-    }
-
-    if (!forQuestion) {
-        return '';
-    }
-
-    const lastActivityAt = new Date(session.sessionMeta.lastActivityAt).getTime();
-    const idleMs = Math.max(1, settings.sessionIdleMinutes) * 60 * 1000;
-
-    if (session.history.length > 0 && Date.now() - lastActivityAt >= idleMs) {
-        return 'idle-timeout';
-    }
-
+    // 策略：只要标签页一直在，就保持同一会话。
+    // 同一 tab 内"目录式 SPA 换章"不再切会话，而是通过 preambleChain 把新章节正文
+    // 作为新的 cache 前缀追加进上下文（见 maybeAppendPreamble / buildMessagesForRequest）。
+    // 会话切分只由 tab 生命周期事件触发（关闭 / 刷新 / URL 导航）。
     return '';
 }
 

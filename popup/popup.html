@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="../styles/popup.css">
     <script src="../lib/marked.min.js"></script>
     <script src="../shared/chatModes.js"></script>
+    <script src="../shared/mentorModes.js"></script>
 </head>
 
 <body>
@@ -17,6 +18,10 @@
                     <span class="slider round"></span>
                 </label>
                 <span class="toggle-label">显示悬浮球</span>
+            </div>
+            <div class="mentor-toggle-wrap">
+                <button type="button" class="panel-mentor" id="mentorToggle" title="学习带教模式（苏格拉底式引导）" aria-pressed="false">🎓</button>
+                <div class="mentor-popover" id="mentorPopover" hidden role="menu" aria-label="选择带教风格"></div>
             </div>
         </div>
         <div class="session-mode-bar">
